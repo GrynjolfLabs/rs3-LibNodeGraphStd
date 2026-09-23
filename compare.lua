@@ -31,8 +31,8 @@ function M.Register(registry)
             anyPin("a"), anyPin("b"), boolOut(),
         },
         run = function(ctx)
-            -- Native Lua semantics: no coercion or type guards. Incompatible
-            -- ordered operands raise an error instead of producing false.
+            -- Use Lua comparison rules. Incompatible operands for ordered
+            -- comparisons raise an error.
             ctx:Out("result", operations[ctx:In("operation")](ctx:In("a"), ctx:In("b")))
         end,
     })
