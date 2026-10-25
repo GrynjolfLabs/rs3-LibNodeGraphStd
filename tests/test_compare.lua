@@ -69,13 +69,60 @@ function TestCompare:testAllOperationsTrueAndFalse()
 end
 
 function TestCompare:testNativeSemanticsAndDefaultEquality()
-    luaunit.assertTrue(self:result(nil, "hello", "hello"))
-    luaunit.assertTrue(self:result("==", nil, nil))
-    luaunit.assertTrue(self:result("!=", true, false))
-    luaunit.assertFalse(self:result("==", "2", 2))
-    luaunit.assertTrue(self:result("<", "a", "b"))
-    luaunit.assertError(function() self:result(">", "2", 1) end)
-    luaunit.assertError(function() self:result("<", nil, 1) end)
+    -- An omitted operation is ==. Compare reads numbers.
+    luaunit.assertTrue(self:result(nil, 4, 4))
+    luaunit.assertFalse(self:result(nil, 4, 5))
+    luaunit.assertTrue(self:result("==", 0, 0))
+    luaunit.assertTrue(self:result("!=", 1, 2))
+    luaunit.assertFalse(self:result("==", 2, 3))
+    luaunit.assertTrue(self:result("<", 1, 2))
+    luaunit.assertFalse(self:result(">", 1, 2))
+end
+
+function TestCompare:testDescriptionSaysCompareComparesTwoNumbers()
+    luaunit.assertEquals(
+        self.registry:GetNodeType("std.compare").description,
+        "Compare two numbers.")
+end
+
+function TestCompare:testNewCompareStoresZeroOnBothInputs()
+    local id = self.graph:AddNode("std.compare")
+    luaunit.assertEquals(self.graph:GetControl(id, "a"), 0)
+    luaunit.assertEquals(self.graph:GetControl(id, "b"), 0)
+    luaunit.assertEquals(self.graph:GetControl(id, "operation"), "==")
+    local operation = self.registry:GetNodeType("std.compare").pins.operation
+    luaunit.assertEquals(operation.dataType, "compareOperation")
+    luaunit.assertEquals(operation.default, "==")
+end
+
+function TestCompare:_source(tag)
+    local key = "test.source." .. tag
+    self.registry:RegisterNodeType(key, {
+        category = "test",
+        pins = { { name = "result", kind = "data", direction = "out", dataType = tag } },
+        run = function() end,
+    })
+    return self.graph:AddNode(key)
+end
+
+function TestCompare:testNewWireRequiresNumberSource()
+    local compare = self.graph:AddNode("std.compare")
+    local flag = self:_source("bool")
+    local text = self:_source("string")
+    for _, pinName in ipairs({ "a", "b" }) do
+        local _, boolReason = self.graph:Connect(flag, "result", compare, pinName)
+        luaunit.assertEquals(boolReason, "type_mismatch")
+        local _, stringReason = self.graph:Connect(text, "result", compare, pinName)
+        luaunit.assertEquals(stringReason, "type_mismatch")
+    end
+    local anySource = self:_source("any")
+    for _, pinName in ipairs({ "a", "b" }) do
+        local anyWire, anyReason = self.graph:Connect(anySource, "result", compare, pinName)
+        luaunit.assertNil(anyWire)
+        luaunit.assertEquals(anyReason, "type_mismatch")
+    end
+    local numberWire = self.graph:Connect(self:_source("number"), "result", compare, "a")
+    luaunit.assertNotNil(numberWire)
 end
 
 function TestCompare:testLegacyGraphsRetainDefaultsConnectionsAndBehavior()
@@ -102,10 +149,73 @@ function TestCompare:testLegacyGraphsRetainDefaultsConnectionsAndBehavior()
     luaunit.assertEquals(Serialize.Serialize(restored).connections, saved.connections)
 end
 
+function TestCompare:testSavedNonNumberWireIntoCompareIsNotKept()
+    self.registry:RegisterNodeType("test.flag", {
+        category = "test",
+        pins = { { name = "result", kind = "data", direction = "out", dataType = "bool" } },
+        run = function(ctx)
+            ctx:Out("result", true)
+        end,
+    })
+    local saved = {
+        version = 1,
+        nodes = {
+            { id = 1, type = "test.flag", controls = {} },
+            { id = 2, type = "std.compare", controls = { b = true } },
+        },
+        connections = {
+            { fromNode = 1, fromPin = "result", toNode = 2, toPin = "a" },
+        },
+    }
+    luaunit.assertErrorMsgContains("type_mismatch", function()
+        Serialize.Deserialize(saved, self.registry)
+    end)
+    local restored = Serialize.Deserialize(saved, self.registry, { onUnknown = "placeholder" })
+    luaunit.assertEquals(Serialize.Serialize(restored).connections, {})
+    luaunit.assertEquals(restored:GetControl(2, "b"), true)
+end
+
+function TestCompare:testSavedNonNumberWireIntoHiddenGreaterThanIsNotKept()
+    self.registry:RegisterNodeType("test.flag", {
+        category = "test",
+        pins = { { name = "result", kind = "data", direction = "out", dataType = "bool" } },
+        run = function(ctx)
+            ctx:Out("result", true)
+        end,
+    })
+    local saved = {
+        version = 1,
+        nodes = {
+            { id = 1, type = "test.flag", controls = {} },
+            { id = 2, type = "std.greaterthan", controls = { b = 1 } },
+        },
+        connections = {
+            { fromNode = 1, fromPin = "result", toNode = 2, toPin = "a" },
+        },
+    }
+    luaunit.assertErrorMsgContains("type_mismatch", function()
+        Serialize.Deserialize(saved, self.registry)
+    end)
+    local restored = Serialize.Deserialize(saved, self.registry, { onUnknown = "placeholder" })
+    luaunit.assertEquals(Serialize.Serialize(restored).connections, {})
+end
+
 function TestCompare:testChangingOperationPreservesWiredInputs()
-    local source = self.graph:AddNode("std.greaterthan", { a = 3, b = 2 })
-    local target = self.graph:AddNode("std.compare", { b = true })
-    self.graph:Connect(source, "result", target, "a")
+    self.registry:RegisterNodeType("test.number", {
+        category = "test",
+        pins = {
+            { name = "n", kind = "data", direction = "in", dataType = "number", default = 0 },
+            { name = "result", kind = "data", direction = "out", dataType = "number" },
+        },
+        run = function(ctx)
+            ctx:Out("result", ctx:In("n"))
+        end,
+    })
+    local left = self.graph:AddNode("test.number", { n = 3 })
+    local right = self.graph:AddNode("test.number", { n = 3 })
+    local target = self.graph:AddNode("std.compare")
+    self.graph:Connect(left, "result", target, "a")
+    self.graph:Connect(right, "result", target, "b")
     local connections = Serialize.Serialize(self.graph).connections
     self.graph:Fire(target)
     luaunit.assertTrue(self.graph:GetLastValue(target, "result"))

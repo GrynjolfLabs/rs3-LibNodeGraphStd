@@ -25,14 +25,12 @@ function M.Register(registry)
     registry:RegisterNodeType("std.compare", {
         category = "boolean",
         displayName = "Compare",
-        description = "Compare two values using the selected operation.",
+        description = "Compare two numbers.",
         pins = {
             { name = "operation", kind = "data", direction = "in", dataType = "compareOperation", default = "==" },
-            anyPin("a"), anyPin("b"), boolOut(),
+            numberPin("a"), numberPin("b"), boolOut(),
         },
         run = function(ctx)
-            -- Use Lua comparison rules. Incompatible operands for ordered
-            -- comparisons raise an error.
             ctx:Out("result", operations[ctx:In("operation")](ctx:In("a"), ctx:In("b")))
         end,
     })
